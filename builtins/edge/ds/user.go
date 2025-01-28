@@ -3,22 +3,23 @@ package ds
 import (
 	"bytes"
 
-	dsc "github.com/aserto-dev/go-directory/aserto/directory/common/v2"
-	dsr "github.com/aserto-dev/go-directory/aserto/directory/reader/v2"
+	dsr3 "github.com/aserto-dev/go-directory/aserto/directory/reader/v3"
 	"github.com/aserto-dev/topaz/resolvers"
-	"github.com/pkg/errors"
-	"github.com/rs/zerolog"
-	"google.golang.org/protobuf/proto"
 
 	"github.com/open-policy-agent/opa/ast"
 	"github.com/open-policy-agent/opa/rego"
 	"github.com/open-policy-agent/opa/types"
+
+	"github.com/rs/zerolog"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/proto"
 )
 
 // RegisterUser - ds.user
 //
 //	ds.user({
-//		"key": ""
+//		"id": ""
 //	})
 func RegisterUser(logger *zerolog.Logger, fnName string, dr resolvers.DirectoryResolver) (*rego.Function, rego.Builtin1) {
 	return &rego.Function{
@@ -27,41 +28,47 @@ func RegisterUser(logger *zerolog.Logger, fnName string, dr resolvers.DirectoryR
 			Memoize: true,
 		},
 		func(bctx rego.BuiltinContext, op1 *ast.Term) (*ast.Term, error) {
-
-			type args struct {
-				Key string `json:"key"`
+			var args struct {
+				ID string `json:"id"`
 			}
 
-			var a args
-			if err := ast.As(op1.Value, &a); err != nil {
+			if err := ast.As(op1.Value, &args); err != nil {
 				return nil, err
 			}
 
-			if (args{}) == a {
-				return help(fnName, args{})
+			if args.ID == "" {
+				type argsV3 struct {
+					ID string `json:"id"`
+				}
+				return help(fnName, argsV3{})
 			}
 
-			client, err := dr.GetDS(bctx.Context)
-			if err != nil {
-				return nil, errors.Wrapf(err, "get directory client")
-			}
-
-			resp, err := client.GetObject(bctx.Context, &dsr.GetObjectRequest{
-				Param: &dsc.ObjectIdentifier{
-					Type: proto.String("user"),
-					Key:  &a.Key,
-				},
+			resp, err := dr.GetDS().GetObject(bctx.Context, &dsr3.GetObjectRequest{
+				ObjectType:    "user",
+				ObjectId:      args.ID,
+				WithRelations: false,
 			})
-			if err != nil {
+			switch {
+			case status.Code(err) == codes.NotFound:
 				traceError(&bctx, fnName, err)
+				astVal, err := ast.InterfaceToValue(map[string]any{})
+				if err != nil {
+					return nil, err
+				}
+				return ast.NewTerm(astVal), nil
+			case err != nil:
 				return nil, err
 			}
 
 			buf := new(bytes.Buffer)
+			var result proto.Message
+
 			if resp.Result != nil {
-				if err := ProtoToBuf(buf, resp.Result); err != nil {
-					return nil, err
-				}
+				result = resp.Result
+			}
+
+			if err := ProtoToBuf(buf, result); err != nil {
+				return nil, err
 			}
 
 			v, err := ast.ValueFromReader(buf)

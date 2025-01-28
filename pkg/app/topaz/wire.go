@@ -5,58 +5,56 @@ package topaz
 
 import (
 	"github.com/google/wire"
-
-	"github.com/prometheus/client_golang/prometheus"
+	"google.golang.org/grpc"
 
 	"github.com/aserto-dev/logger"
 	"github.com/aserto-dev/topaz/pkg/app"
-	"github.com/aserto-dev/topaz/pkg/app/auth"
-	"github.com/aserto-dev/topaz/pkg/app/impl"
-	"github.com/aserto-dev/topaz/pkg/app/server"
 	"github.com/aserto-dev/topaz/pkg/cc"
 	"github.com/aserto-dev/topaz/pkg/cc/config"
+	builder "github.com/aserto-dev/topaz/pkg/service/builder"
 	"github.com/aserto-dev/topaz/resolvers"
 )
 
 var (
 	commonSet = wire.NewSet(
-		server.NewServer,
-		server.NewGatewayServer,
-		server.GatewayMux,
-
 		resolvers.New,
-		impl.NewAuthorizerServer,
 
-		GRPCServerRegistrations,
-		GatewayServerRegistrations,
+		builder.NewServiceFactory,
+		builder.NewServiceManager,
 
-		auth.NewAPIKeyAuthMiddleware,
+		DefaultGRPCOptions,
+		DefaultServices,
 
 		wire.FieldsOf(new(*cc.CC), "Config", "Log", "Context", "ErrGroup"),
 		wire.FieldsOf(new(*config.Config), "Common", "DecisionLogger"),
-		wire.Struct(new(app.Authorizer), "*"),
+		wire.Struct(new(app.Topaz), "*"),
 	)
 
 	appTestSet = wire.NewSet(
 		commonSet,
 		cc.NewTestCC,
-		prometheus.NewRegistry,
-		wire.Bind(new(prometheus.Registerer), new(*prometheus.Registry)),
 	)
 
 	appSet = wire.NewSet(
 		commonSet,
 		cc.NewCC,
-		wire.InterfaceValue(new(prometheus.Registerer), prometheus.DefaultRegisterer),
 	)
 )
 
-func BuildApp(logOutput logger.Writer, errOutput logger.ErrWriter, configPath config.Path, overrides config.Overrider) (*app.Authorizer, func(), error) {
+func BuildApp(logOutput logger.Writer, errOutput logger.ErrWriter, configPath config.Path, overrides config.Overrider) (*app.Topaz, func(), error) {
 	wire.Build(appSet)
-	return &app.Authorizer{}, func() {}, nil
+	return &app.Topaz{}, func() {}, nil
 }
 
-func BuildTestApp(logOutput logger.Writer, errOutput logger.ErrWriter, configPath config.Path, overrides config.Overrider) (*app.Authorizer, func(), error) {
+func BuildTestApp(logOutput logger.Writer, errOutput logger.ErrWriter, configPath config.Path, overrides config.Overrider) (*app.Topaz, func(), error) {
 	wire.Build(appTestSet)
-	return &app.Authorizer{}, func() {}, nil
+	return &app.Topaz{}, func() {}, nil
+}
+
+func DefaultGRPCOptions() []grpc.ServerOption {
+	return nil
+}
+
+func DefaultServices() map[string]app.ServiceTypes {
+	return make(map[string]app.ServiceTypes)
 }

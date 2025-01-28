@@ -1,33 +1,25 @@
 package config
 
 import (
-	"bytes"
 	"fmt"
 	"io"
 	"os"
-	"path/filepath"
-	"regexp"
-	"strings"
-	"time"
-
-	"github.com/mitchellh/mapstructure"
-	"github.com/pkg/errors"
-	"github.com/rs/zerolog"
-	"github.com/spf13/viper"
 
 	"github.com/aserto-dev/certs"
+	client "github.com/aserto-dev/go-aserto"
+	"github.com/aserto-dev/go-edge-ds/pkg/directory"
 	"github.com/aserto-dev/logger"
 	"github.com/aserto-dev/runtime"
-	"github.com/aserto-dev/topaz/directory"
+	"github.com/aserto-dev/topaz/pkg/debug"
+	builder "github.com/aserto-dev/topaz/pkg/service/builder"
+	"github.com/pkg/errors"
+	"github.com/rs/zerolog"
 )
 
 // CommandMode -- enum type.
 type CommandMode int
 
-var (
-	DefaultTLSGenDir = os.ExpandEnv("$HOME/.config/topaz/certs")
-	CertificateSets  = []string{"grpc", "gateway"}
-)
+var CertificateSets = []string{"grpc", "gateway"}
 
 // CommandMode -- enum constants.
 const (
@@ -36,36 +28,30 @@ const (
 	CommandModeBuild
 )
 
+type ServicesConfig struct {
+	Health struct {
+		ListenAddress string            `json:"listen_address"`
+		Certificates  *client.TLSConfig `json:"certs"`
+	} `json:"health"`
+	Metrics struct {
+		ListenAddress string            `json:"listen_address"`
+		Certificates  *client.TLSConfig `json:"certs"`
+		ZPages        bool              `json:"zpages"`
+	} `json:"metrics"`
+	Services map[string]*builder.API `json:"services"`
+}
+
 // Config holds the configuration for the app.
 type Common struct {
-	Logging logger.Config `json:"logging"`
+	Version      int           `json:"version"`
+	Logging      logger.Config `json:"logging"`
+	DebugService debug.Config  `json:"debug_service"`
 
 	Command struct {
 		Mode CommandMode
 	} `json:"-"`
 
-	API struct {
-		GRPC struct {
-			ListenAddress string `json:"listen_address"`
-			// Default connection timeout is 120 seconds
-			// https://godoc.org/google.golang.org/grpc#ConnectionTimeout
-			ConnectionTimeoutSeconds uint32               `json:"connection_timeout_seconds"`
-			Certs                    certs.TLSCredsConfig `json:"certs"`
-		} `json:"grpc"`
-		Gateway struct {
-			ListenAddress     string               `json:"listen_address"`
-			AllowedOrigins    []string             `json:"allowed_origins"`
-			Certs             certs.TLSCredsConfig `json:"certs"`
-			HTTP              bool                 `json:"http"`
-			ReadTimeout       time.Duration        `json:"read_timeout"`
-			ReadHeaderTimeout time.Duration        `json:"read_header_timeout"`
-			WriteTimeout      time.Duration        `json:"write_timeout"`
-			IdleTimeout       time.Duration        `json:"idle_timeout"`
-		} `json:"gateway"`
-		Health struct {
-			ListenAddress string `json:"listen_address"`
-		} `json:"health"`
-	} `json:"api"`
+	APIConfig ServicesConfig `json:"api"`
 
 	JWT struct {
 		// Specifies the duration in which exp (Expiry) and nbf (Not Before)
@@ -74,7 +60,10 @@ type Common struct {
 	} `json:"jwt"`
 
 	// Directory configuration
-	Directory directory.Config `json:"directory_service"`
+	Edge directory.Config `json:"directory"`
+
+	// Authorizer directory resolver configuration
+	DirectoryResolver client.Config `json:"remote_directory"`
 
 	// Default OPA configuration
 	OPA runtime.Config `json:"opa"`
@@ -94,11 +83,10 @@ type Overrider func(*Config)
 func NewConfig(configPath Path, log *zerolog.Logger, overrides Overrider, certsGenerator *certs.Generator) (*Config, error) { // nolint:funlen // default list of values can be long
 	newLogger := log.With().Str("component", "config").Logger()
 	log = &newLogger
-	v := viper.New()
 
 	file := "config.yaml"
 	if configPath != "" {
-		exists, err := fileExists(string(configPath))
+		exists, err := FileExists(string(configPath))
 		if err != nil {
 			return nil, errors.Wrapf(err, "failed to determine if config file '%s' exists", configPath)
 		}
@@ -110,100 +98,63 @@ func NewConfig(configPath Path, log *zerolog.Logger, overrides Overrider, certsG
 		file = string(configPath)
 	}
 
-	v.SetConfigType("yaml")
-	v.AddConfigPath(".")
-	v.SetConfigFile(file)
-	v.SetEnvPrefix("TOPAZ")
-	v.SetEnvKeyReplacer(strings.NewReplacer("-", "_"))
-
-	// Set defaults
-	v.SetDefault("jwt.acceptable_time_skew_seconds", 5)
-	for _, svc := range CertificateSets {
-		v.SetDefault(fmt.Sprintf("api.%s.certs.tls_key_path", svc), filepath.Join(DefaultTLSGenDir, svc+".key"))
-		v.SetDefault(fmt.Sprintf("api.%s.certs.tls_cert_path", svc), filepath.Join(DefaultTLSGenDir, svc+".crt"))
-		v.SetDefault(fmt.Sprintf("api.%s.certs.tls_ca_cert_path", svc), filepath.Join(DefaultTLSGenDir, svc+"-ca.crt"))
-	}
-	v.SetDefault("api.grpc.connection_timeout_seconds", 120)
-	v.SetDefault("api.grpc.listen_address", "0.0.0.0:8282")
-
-	v.SetDefault("api.gateway.listen_address", "0.0.0.0:8383")
-	v.SetDefault("api.gateway.http", false)
-	v.SetDefault("api.gateway.read_timeout", 2*time.Second)
-	v.SetDefault("api.gateway.read_header_timeout", 2*time.Second)
-	v.SetDefault("api.gateway.write_timeout", 2*time.Second)
-	v.SetDefault("api.gateway.idle_timeout", 30*time.Second)
-
-	v.SetDefault("api.health.listen_address", "0.0.0.0:8484")
-
-	v.SetDefault("opa.max_plugin_wait_time_seconds", "30")
-
-	defaults(v)
-
-	configExists, err := fileExists(file)
+	configExists, err := FileExists(file)
 	if err != nil {
 		return nil, errors.Wrapf(err, "filesystem error")
 	}
 
+	configLoader := new(Loader)
+
 	if configExists {
-		buf, err := os.ReadFile(v.ConfigFileUsed())
+		configLoader, err = LoadConfiguration(file)
 		if err != nil {
-			return nil, errors.Wrapf(err, "failed to read config file '%s'", file)
+			return nil, err
 		}
-		subBuf := subEnvVars(string(buf))
-		r := bytes.NewReader([]byte(subBuf))
-
-		if err := v.ReadConfig(r); err != nil {
-			return nil, errors.Wrapf(err, "failed to parse config file '%s'", file)
+		if configLoader.HasTopazDir {
+			log.Warn().Msg("This configuration file still uses TOPAZ_DIR environment variable. Please change to using the new TOPAZ_DB_DIR and TOPAZ_CERTS_DIR environment variables.")
 		}
-	}
 
-	v.AutomaticEnv()
-
-	cfg := new(Config)
-
-	err = v.UnmarshalExact(cfg, func(dc *mapstructure.DecoderConfig) {
-		dc.TagName = "json"
-	})
-	if err != nil {
-		return nil, errors.Wrap(err, "failed to unmarshal config file")
+		err = validateVersion(configLoader.Configuration.Version)
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	if overrides != nil {
-		overrides(cfg)
+		overrides(configLoader.Configuration)
 	}
 
 	// This is where validation of config happens.
 	err = func() error {
 		var err error
 
-		if cfg.Logging.LogLevel == "" {
-			cfg.Logging.LogLevelParsed = zerolog.InfoLevel
+		if configLoader.Configuration.Logging.LogLevel == "" {
+			configLoader.Configuration.Logging.LogLevelParsed = zerolog.InfoLevel
 		} else {
-			cfg.Logging.LogLevelParsed, err = zerolog.ParseLevel(cfg.Logging.LogLevel)
+			configLoader.Configuration.Logging.LogLevelParsed, err = zerolog.ParseLevel(configLoader.Configuration.Logging.LogLevel)
 			if err != nil {
 				return errors.Wrapf(err, "logging.log_level failed to parse")
 			}
 		}
 
-		if cfg.JWT.AcceptableTimeSkewSeconds < 0 {
+		if configLoader.Configuration.JWT.AcceptableTimeSkewSeconds < 0 {
 			return errors.New("jwt.acceptable_time_skew_seconds must be positive or 0")
 		}
 
-		return cfg.validation()
+		return configLoader.Configuration.validation()
 	}()
-
 	if err != nil {
 		return nil, errors.Wrap(err, "failed to validate config file")
 	}
 
 	if certsGenerator != nil {
-		err = cfg.setupCerts(log, certsGenerator)
+		err = configLoader.Configuration.setupCerts(log, certsGenerator)
 		if err != nil {
 			return nil, errors.Wrap(err, "failed to setup certs")
 		}
 	}
 
-	return cfg, nil
+	return configLoader.Configuration, nil
 }
 
 // NewLoggerConfig creates a new LoggerConfig.
@@ -224,61 +175,62 @@ func NewLoggerConfig(configPath Path, overrides Overrider) (*logger.Config, erro
 }
 
 func (c *Config) setupCerts(log *zerolog.Logger, certsGenerator *certs.Generator) error {
+	commonName := "topaz"
+
 	existingFiles := []string{}
-	for _, file := range []string{
-		c.API.GRPC.Certs.TLSCACertPath,
-		c.API.GRPC.Certs.TLSCertPath,
-		c.API.GRPC.Certs.TLSKeyPath,
-		c.API.Gateway.Certs.TLSCACertPath,
-		c.API.Gateway.Certs.TLSCertPath,
-		c.API.Gateway.Certs.TLSKeyPath,
-	} {
-		exists, err := fileExists(file)
-		if err != nil {
-			return errors.Wrapf(err, "failed to determine if file '%s' exists", file)
+	for serviceName, config := range c.APIConfig.Services {
+		for _, file := range []string{
+			config.GRPC.Certs.CA,
+			config.GRPC.Certs.Cert,
+			config.GRPC.Certs.Key,
+			config.Gateway.Certs.CA,
+			config.Gateway.Certs.Cert,
+			config.Gateway.Certs.Key,
+		} {
+			exists, err := FileExists(file)
+			if err != nil {
+				return errors.Wrapf(err, "failed to determine if file '%s' exists (%s)", file, serviceName)
+			}
+
+			if !exists {
+				continue
+			}
+
+			existingFiles = append(existingFiles, file)
 		}
 
-		if !exists {
-			continue
-		}
+		if len(existingFiles) == 0 {
+			if config.GRPC.Certs.HasCert() && config.GRPC.Certs.HasCA() {
+				err := certsGenerator.MakeDevCert(&certs.CertGenConfig{
+					CommonName:  fmt.Sprintf("%s-grpc", commonName),
+					CertKeyPath: config.GRPC.Certs.Key,
+					CertPath:    config.GRPC.Certs.Cert,
+					CertCAPath:  config.GRPC.Certs.CA,
+				})
+				if err != nil {
+					return errors.Wrapf(err, "failed to generate grpc certs (%s)", serviceName)
+				}
+				log.Info().Str("service", serviceName).Msg("gRPC certs configured")
+			}
 
-		existingFiles = append(existingFiles, file)
+			if config.Gateway.Certs.HasCert() && config.Gateway.Certs.HasCA() {
+				err := certsGenerator.MakeDevCert(&certs.CertGenConfig{
+					CommonName:  fmt.Sprintf("%s-gateway", commonName),
+					CertKeyPath: config.Gateway.Certs.Key,
+					CertPath:    config.Gateway.Certs.Cert,
+					CertCAPath:  config.Gateway.Certs.CA,
+				})
+				if err != nil {
+					return errors.Wrapf(err, "failed to generate gateway certs (%s)", serviceName)
+				}
+				log.Info().Str("service", serviceName).Msg("gateway certs configured")
+			}
+		}
 	}
-
-	if len(existingFiles) == 0 {
-		err := certsGenerator.MakeDevCert(&certs.CertGenConfig{
-			CommonName:       "authorizer-grpc",
-			CertKeyPath:      c.API.GRPC.Certs.TLSKeyPath,
-			CertPath:         c.API.GRPC.Certs.TLSCertPath,
-			CACertPath:       c.API.GRPC.Certs.TLSCACertPath,
-			DefaultTLSGenDir: DefaultTLSGenDir,
-		})
-		if err != nil {
-			return errors.Wrap(err, "failed to generate grpc certs")
-		}
-
-		err = certsGenerator.MakeDevCert(&certs.CertGenConfig{
-			CommonName:       "authorizer-gateway",
-			CertKeyPath:      c.API.Gateway.Certs.TLSKeyPath,
-			CertPath:         c.API.Gateway.Certs.TLSCertPath,
-			CACertPath:       c.API.Gateway.Certs.TLSCACertPath,
-			DefaultTLSGenDir: DefaultTLSGenDir,
-		})
-		if err != nil {
-			return errors.Wrap(err, "failed to generate gateway certs")
-		}
-	} else {
-		msg := zerolog.Arr()
-		for _, f := range existingFiles {
-			msg.Str(f)
-		}
-		log.Info().Array("existing-files", msg).Msg("some cert files already exist, skipping generation")
-	}
-
 	return nil
 }
 
-func fileExists(path string) (bool, error) {
+func FileExists(path string) (bool, error) {
 	if _, err := os.Stat(path); err == nil {
 		return true, nil
 	} else if os.IsNotExist(err) {
@@ -286,26 +238,4 @@ func fileExists(path string) (bool, error) {
 	} else {
 		return false, errors.Wrapf(err, "failed to stat file '%s'", path)
 	}
-}
-
-var envRegex = regexp.MustCompile(`(?U:\${.*})`)
-
-// subEnvVars will look for any environment variables in the passed in string
-// with the syntax of ${VAR_NAME} and replace that string with ENV[VAR_NAME].
-func subEnvVars(s string) string {
-	updatedConfig := envRegex.ReplaceAllStringFunc(s, func(s string) string {
-		// Trim off the '${' and '}'
-		if len(s) <= 3 {
-			// This should never happen..
-			return ""
-		}
-		varName := s[2 : len(s)-1]
-
-		// Lookup the variable in the environment. We play by
-		// bash rules.. if its undefined we'll treat it as an
-		// empty string instead of raising an error.
-		return os.Getenv(varName)
-	})
-
-	return updatedConfig
 }

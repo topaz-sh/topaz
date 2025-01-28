@@ -3,24 +3,20 @@
 # 2. Your organization
 # 3. Your policy image name and label
 ---
+version: 2
 logging:
   prod: true
   log_level: debug
 
-directory_service:
-  edge:
-    db_path: ${TOPAZ_DIR}/db/directory.db
-    seed_metadata: false
-  remote:
-    address: "localhost:9292"
-    insecure: true
-
 api:
-  gateway:
-    allowed_origins:
-    - https://localhost
-  grpc:
-    connection_timeout_seconds: 2
+  services:
+    authorizer:
+      gateway:
+        allowed_origins:
+        - https://localhost
+      grpc:
+        listen_address: "0.0.0.0:8282"
+        connection_timeout_seconds: 2
 
 opa:
   instance_id: "-"
@@ -36,7 +32,7 @@ opa:
         response_header_timeout_seconds: 5
         credentials:
           bearer:
-            schema: "Bearer"
+            schema: "Basic"
             token: "<your_pat>"
     bundles:
       peoplefinder:

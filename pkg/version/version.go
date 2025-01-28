@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"runtime"
 	"time"
+
+	"github.com/aserto-dev/topaz/pkg/cli/x"
 )
 
 var (
@@ -22,7 +24,7 @@ type Info struct {
 // GetInfo - get version stamp information.
 func GetInfo() Info {
 	if ver == "" {
-		ver = "0.0.0"
+		ver = "0.0.0-dev"
 	}
 
 	if date == "" {
@@ -49,4 +51,8 @@ func (vi Info) String() string {
 		runtime.GOARCH,
 		vi.Date,
 	)
+}
+
+func UserAgent() string {
+	return fmt.Sprintf("%s/%s", x.AppName, GetInfo().Version)
 }

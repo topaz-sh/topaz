@@ -1,59 +1,59 @@
 package ds
 
 import (
-	"github.com/aserto-dev/go-authorizer/pkg/aerr"
 	"github.com/aserto-dev/topaz/directory"
 	"github.com/aserto-dev/topaz/resolvers"
-	"github.com/rs/zerolog"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 
 	"github.com/open-policy-agent/opa/ast"
 	"github.com/open-policy-agent/opa/rego"
 	"github.com/open-policy-agent/opa/types"
-	"github.com/pkg/errors"
+
+	"github.com/rs/zerolog"
 )
 
-// RegisterIdentity - ds.identity
-//
-// get user id for identity
+// RegisterIdentity - ds.identity - get user id (key) for identity
 //
 //	ds.identity({
-//		"key": ""
+//		"id": ""
 //	})
 func RegisterIdentity(logger *zerolog.Logger, fnName string, dr resolvers.DirectoryResolver) (*rego.Function, rego.Builtin1) {
 	return &rego.Function{
 			Name:    fnName,
 			Decl:    types.NewFunction(types.Args(types.A), types.A),
-			Memoize: false,
+			Memoize: true,
 		},
 		func(bctx rego.BuiltinContext, op1 *ast.Term) (*ast.Term, error) {
-
-			type args struct {
-				Key string `json:"key"`
+			var args struct {
+				ID string `json:"id"`
 			}
 
-			var a args
-			if err := ast.As(op1.Value, &a); err != nil {
-				return nil, err
-			}
-
-			if (args{}) == a {
-				return help(fnName, args{})
-			}
-
-			client, err := dr.GetDS(bctx.Context)
-			if err != nil {
-				return nil, errors.Wrapf(err, "get directory client")
-			}
-
-			user, err := directory.GetIdentityV2(client, bctx.Context, a.Key)
-			switch {
-			case errors.Is(err, aerr.ErrDirectoryObjectNotFound):
-				return nil, err
-			case err != nil:
+			if err := ast.As(op1.Value, &args); err != nil {
 				traceError(&bctx, fnName, err)
 				return nil, err
+			}
+
+			if args.ID == "" {
+				type argsV3 struct {
+					ID string `json:"id"`
+				}
+				return help(fnName, argsV3{})
+			}
+
+			user, err := directory.GetIdentityV2(bctx.Context, dr.GetDS(), args.ID)
+			switch {
+			case status.Code(err) == codes.NotFound:
+				traceError(&bctx, fnName, err)
+				astVal, err := ast.InterfaceToValue(map[string]any{})
+				if err != nil {
+					return nil, err
+				}
+				return ast.NewTerm(astVal), nil
+			case err != nil:
+				return nil, err
 			default:
-				return ast.StringTerm(user.Key), nil
+				return ast.StringTerm(user.Id), nil
 			}
 		}
 }

@@ -1,15 +1,16 @@
 FROM alpine
 
-RUN apk add --no-cache bash tzdata
+RUN apk add --no-cache bash tzdata ca-certificates
 
-EXPOSE 8282
-EXPOSE 8383
-EXPOSE 8484
-EXPOSE 8585
-EXPOSE 9292
+RUN mkdir /config && \
+    mkdir /certs && \
+    mkdir /db && \
+    mkdir /decisions
+VOLUME ["/config", "/certs", "/db", "/decisions"]
 
 WORKDIR /app
 
-COPY topazd /app/
+COPY topaz* /app/
 
 ENTRYPOINT ["./topazd"]
+CMD ["run", "-c", "/config/config.yaml"]

@@ -7,26 +7,18 @@ import (
 
 	cerr "github.com/aserto-dev/errors"
 	"github.com/aserto-dev/go-authorizer/pkg/aerr"
-	v2 "github.com/aserto-dev/go-directory/aserto/directory/common/v2"
-	ds2 "github.com/aserto-dev/go-directory/aserto/directory/reader/v2"
+	dsc3 "github.com/aserto-dev/go-directory/aserto/directory/common/v3"
+	dsr3 "github.com/aserto-dev/go-directory/aserto/directory/reader/v3"
 	"github.com/aserto-dev/go-directory/pkg/derr"
 )
 
-func GetIdentityV2(client ds2.ReaderClient, ctx context.Context, identity string) (*v2.Object, error) {
-	identityString := "identity"
-	obj := v2.ObjectIdentifier{Type: &identityString, Key: &identity}
-
-	relationString := "identifier"
-	subjectType := "user"
-	withObjects := true
-
-	relResp, err := client.GetRelation(ctx, &ds2.GetRelationRequest{
-		Param: &v2.RelationIdentifier{
-			Object:   &obj,
-			Relation: &v2.RelationTypeIdentifier{Name: &relationString, ObjectType: &identityString},
-			Subject:  &v2.ObjectIdentifier{Type: &subjectType},
-		},
-		WithObjects: &withObjects,
+func GetIdentityV2(ctx context.Context, client dsr3.ReaderClient, identity string) (*dsc3.Object, error) {
+	relResp, err := client.GetRelation(ctx, &dsr3.GetRelationRequest{
+		ObjectType:  "identity",
+		ObjectId:    identity,
+		Relation:    "identifier",
+		SubjectType: "user",
+		WithObjects: true,
 	})
 
 	switch {
@@ -35,7 +27,7 @@ func GetIdentityV2(client ds2.ReaderClient, ctx context.Context, identity string
 	case err != nil:
 		return nil, err
 
-	case relResp.Results == nil:
+	case relResp.Result == nil:
 		return nil, aerr.ErrDirectoryObjectNotFound
 
 	case len(relResp.Objects) == 0:

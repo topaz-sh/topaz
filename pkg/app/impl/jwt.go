@@ -1,6 +1,7 @@
 package impl
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -11,14 +12,16 @@ import (
 
 	"github.com/aserto-dev/go-authorizer/aserto/authorizer/v2/api"
 	"github.com/aserto-dev/go-authorizer/pkg/aerr"
-	v2 "github.com/aserto-dev/go-directory/aserto/directory/common/v2"
-	ds2 "github.com/aserto-dev/go-directory/aserto/directory/reader/v2"
-	"github.com/lestrrat-go/jwx/jwk"
-	"github.com/lestrrat-go/jwx/jwt"
+	dsc3 "github.com/aserto-dev/go-directory/aserto/directory/common/v3"
+	dsr3 "github.com/aserto-dev/go-directory/aserto/directory/reader/v3"
+	"github.com/aserto-dev/go-directory/pkg/pb"
+	"github.com/aserto-dev/topaz/directory"
+
+	"github.com/lestrrat-go/jwx/v2/jwk"
+	"github.com/lestrrat-go/jwx/v2/jwt"
 	"github.com/pkg/errors"
 	"google.golang.org/protobuf/proto"
-
-	"github.com/aserto-dev/topaz/directory"
+	"google.golang.org/protobuf/types/known/structpb"
 )
 
 var (
@@ -32,7 +35,7 @@ var (
 
 // getUserFromJWT.
 func (s *AuthorizerServer) getUserFromJWT(ctx context.Context, bearerJWT string) (proto.Message, error) {
-	resp := v2.Object{}
+	resp := dsc3.Object{}
 
 	ident, err := s.getIdentityFromJWT(ctx, bearerJWT)
 	if err != nil {
@@ -51,27 +54,15 @@ func (s *AuthorizerServer) getUserFromJWT(ctx context.Context, bearerJWT string)
 func (s *AuthorizerServer) getIdentityFromJWT(ctx context.Context, bearerJWT string) (string, error) {
 	log := s.logger
 
-	jwtTemp, err := jwt.ParseString(bearerJWT, jwt.WithValidate(false))
+	jwtTemp, err := jwt.ParseString(bearerJWT, jwt.WithVerify(false))
 	if err != nil {
 		log.Error().Err(err).Msg("jwt parse without validation")
 		return "", err
 	}
 
-	options := []jwt.ParseOption{
-		jwt.WithValidate(true),
-		jwt.WithAcceptableSkew(time.Duration(s.cfg.JWT.AcceptableTimeSkewSeconds) * time.Second),
-	}
-
-	jwksURL, err := s.jwksURL(ctx, jwtTemp.Issuer())
+	options, err := s.jwtParseStringOptions(ctx, jwtTemp)
 	if err != nil {
-		log.Debug().Str("issuer", jwtTemp.Issuer()).Msg("token didn't have a JWKS endpoint we could use for verification")
-	} else {
-		jwkSet, errX := jwk.Fetch(ctx, jwksURL.String())
-		if errX != nil {
-			return "", errors.Wrap(errX, "failed to fetch JWK set for validation")
-		}
-
-		options = append(options, jwt.WithKeySet(jwkSet))
+		return "", err
 	}
 
 	jwtToken, err := jwt.ParseString(
@@ -86,6 +77,65 @@ func (s *AuthorizerServer) getIdentityFromJWT(ctx context.Context, bearerJWT str
 	ident := jwtToken.Subject()
 
 	return ident, nil
+}
+
+func (s *AuthorizerServer) jwtParseStringOptions(ctx context.Context, jwtToken jwt.Token) ([]jwt.ParseOption, error) {
+	options := []jwt.ParseOption{
+		jwt.WithValidate(true),
+		jwt.WithAcceptableSkew(time.Duration(s.cfg.JWT.AcceptableTimeSkewSeconds) * time.Second),
+	}
+
+	jwtKeysURL, err := s.jwksURLFromCache(ctx, jwtToken.Issuer())
+
+	if err != nil {
+		return nil, errors.Wrap(err, "token didn't have a JWKS endpoint we could use for verification")
+	} else {
+		err := registerJWKSURL(ctx, s.jwkCache, jwtKeysURL)
+		if err != nil {
+			return nil, errors.Wrap(err, "failed to register JWKS URL")
+		}
+
+		jwkSet, errX := s.jwkCache.Get(ctx, jwtKeysURL)
+		if errX != nil {
+			return nil, errors.Wrap(errX, "failed to fetch JWK set for validation")
+		}
+		options = append(options, jwt.WithKeySet(jwkSet))
+	}
+
+	return options, nil
+}
+
+func registerJWKSURL(ctx context.Context, jwkCache *jwk.Cache, jwksURL string) error {
+	if !jwkCache.IsRegistered(jwksURL) {
+		err := jwkCache.Register(jwksURL, jwk.WithMinRefreshInterval(15*time.Minute))
+		if err != nil {
+			return err
+		}
+
+		_, err = jwkCache.Refresh(ctx, jwksURL)
+		if err != nil {
+			fmt.Printf("failed to refresh JWKS: %s\n", err)
+			return err
+		}
+	}
+
+	return nil
+}
+
+func (s *AuthorizerServer) jwksURLFromCache(ctx context.Context, issuer string) (string, error) {
+	var jwksURL string
+	if val, ok := s.issuers.Load(issuer); ok {
+		jwksURL = val.(string)
+	} else {
+		jk, err := s.jwksURL(ctx, issuer)
+		if err != nil {
+			return "", err
+		}
+		jwksURL = jk.String()
+		s.issuers.Store(issuer, jwksURL)
+	}
+
+	return jwksURL, nil
 }
 
 // jwksURL.
@@ -145,7 +195,7 @@ func (s *AuthorizerServer) getUserFromIdentityContext(ctx context.Context, ident
 
 	case api.IdentityType_IDENTITY_TYPE_SUB:
 		if identityContext.Identity == "" {
-			return nil, fmt.Errorf("identity value not set (type: %s)", identityContext.Type.String())
+			return nil, errors.Errorf("identity value not set (type: %s)", identityContext.Type.String())
 		}
 
 		user, err := s.getUserFromIdentity(ctx, identityContext.Identity)
@@ -156,7 +206,7 @@ func (s *AuthorizerServer) getUserFromIdentityContext(ctx context.Context, ident
 		return user, nil
 	case api.IdentityType_IDENTITY_TYPE_JWT:
 		if identityContext.Identity == "" {
-			return nil, fmt.Errorf("identity value not set (type: %s)", identityContext.Type.String())
+			return nil, errors.Errorf("identity value not set (type: %s)", identityContext.Type.String())
 		}
 
 		user, err := s.getUserFromJWT(ctx, identityContext.Identity)
@@ -165,51 +215,60 @@ func (s *AuthorizerServer) getUserFromIdentityContext(ctx context.Context, ident
 		}
 
 		return user, nil
+	case api.IdentityType_IDENTITY_TYPE_MANUAL:
+		if identityContext.Identity == "" {
+			return nil, errors.Errorf("identity value not set (type: %s)", identityContext.Type.String())
+		}
+
+		// the resulting user object will be an empty object.
+		return pb.NewStruct(), nil
 	default:
-		return nil, fmt.Errorf("invalid identity type %s", identityContext.Type.String())
+		return nil, errors.Errorf("invalid identity type %s", identityContext.Type.String())
 	}
 }
 
 func (s *AuthorizerServer) getUserFromIdentity(ctx context.Context, identity string) (proto.Message, error) {
-	client, err := s.resolver.GetDirectoryResolver().GetDS(ctx)
-	if err != nil {
-		return nil, err
-	}
-	user, err := directory.GetIdentityV2(client, ctx, identity)
+	client := s.resolver.GetDirectoryResolver().GetDS()
+
+	user, err := directory.GetIdentityV2(ctx, client, identity)
 	switch {
 	case errors.Is(err, aerr.ErrDirectoryObjectNotFound):
-		return nil, err
+		// Try to find a user with key == identity
+		return s.getObject(ctx, "user", identity)
 	case err != nil:
 		return nil, err
-
 	default:
+		return addObjectKey(user)
 	}
-
-	if user == nil {
-		return s.findUser(ctx, identity)
-	}
-
-	return user, nil
 }
 
-func (s *AuthorizerServer) findUser(ctx context.Context, keyOrID string) (proto.Message, error) {
-	return s.getObjectByKey(ctx, "user", keyOrID)
-}
+func (s *AuthorizerServer) getObject(ctx context.Context, objType, objID string) (proto.Message, error) {
+	client := s.resolver.GetDirectoryResolver().GetDS()
 
-func (s *AuthorizerServer) getObjectByKey(ctx context.Context, objType, key string) (proto.Message, error) {
-	return s.getObject(ctx, &v2.ObjectIdentifier{Type: &objType, Key: &key})
-}
-
-func (s *AuthorizerServer) getObject(ctx context.Context, obj *v2.ObjectIdentifier) (proto.Message, error) {
-	client, err := s.resolver.GetDirectoryResolver().GetDS(ctx)
+	objResp, err := client.GetObject(ctx, &dsr3.GetObjectRequest{
+		ObjectType: objType,
+		ObjectId:   objID,
+	})
 	if err != nil {
 		return nil, err
 	}
 
-	objResp, err := client.GetObject(ctx, &ds2.GetObjectRequest{Param: obj})
-	if err != nil {
+	return addObjectKey(objResp.Result)
+}
+
+func addObjectKey(in *dsc3.Object) (proto.Message, error) {
+	buf := new(bytes.Buffer)
+	if err := pb.ProtoToBuf(buf, in); err != nil {
 		return nil, err
 	}
 
-	return objResp.Result, nil
+	out := pb.NewStruct()
+
+	if err := pb.BufToProto(bytes.NewReader(buf.Bytes()), out); err != nil {
+		return nil, err
+	}
+
+	out.Fields["key"] = structpb.NewStringValue(out.Fields["id"].GetStringValue())
+
+	return out, nil
 }

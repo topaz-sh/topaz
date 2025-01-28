@@ -1,80 +1,97 @@
 package ds
 
 import (
-	dsc "github.com/aserto-dev/go-directory/aserto/directory/common/v2"
-	dsr "github.com/aserto-dev/go-directory/aserto/directory/reader/v2"
+	dsr3 "github.com/aserto-dev/go-directory/aserto/directory/reader/v3"
 	"github.com/aserto-dev/topaz/resolvers"
+
 	"github.com/open-policy-agent/opa/ast"
 	"github.com/open-policy-agent/opa/rego"
 	"github.com/open-policy-agent/opa/types"
-	"github.com/pkg/errors"
+
 	"github.com/rs/zerolog"
 	"google.golang.org/protobuf/proto"
 )
 
+// RegisterCheck - ds.check
+//
+//	ds.check({
+//	  "object_type": "",
+//	  "object_id": "",
+//	  "relation": "",
+//	  "subject_type": ""
+//	  "subject_id": "",
+//	  "trace": false
+//	})
+func RegisterCheck(logger *zerolog.Logger, fnName string, dr resolvers.DirectoryResolver) (*rego.Function, rego.Builtin1) {
+	return &rego.Function{
+			Name:    fnName,
+			Decl:    types.NewFunction(types.Args(types.A), types.B),
+			Memoize: true,
+		},
+		func(bctx rego.BuiltinContext, op1 *ast.Term) (*ast.Term, error) {
+			var args dsr3.CheckRequest
+
+			if err := ast.As(op1.Value, &args); err != nil {
+				return nil, err
+			}
+
+			if proto.Equal(&args, &dsr3.CheckRequest{}) {
+				return helpMsg(fnName, &dsr3.CheckRequest{
+					ObjectType:  "",
+					ObjectId:    "",
+					Relation:    "",
+					SubjectType: "",
+					SubjectId:   "",
+				})
+			}
+
+			resp, err := dr.GetDS().Check(bctx.Context, &args)
+			if err != nil {
+				traceError(&bctx, fnName, err)
+				return nil, err
+			}
+
+			return ast.BooleanTerm(resp.Check), nil
+		}
+}
+
 // RegisterCheckRelation - ds.check_relation
 //
-//	ds.check_relation({
-//	  "object": {
-//	    "type": ""
-//	    "key": "",
-//	  },
-//	  "relation": {
-//	    "name": "",
-//	  },
-//	  "subject": {
-//	    "type": ""
-//	    "key": "",
+//	ds.check_relation: {
+//		"object_id": "",
+//		"object_type": "",
+//		"relation": "",
+//		"subject_id": "",
+//		"subject_type": "",
+//		"trace": false
 //	  }
-//	})
 func RegisterCheckRelation(logger *zerolog.Logger, fnName string, dr resolvers.DirectoryResolver) (*rego.Function, rego.Builtin1) {
 	return &rego.Function{
 			Name:    fnName,
 			Decl:    types.NewFunction(types.Args(types.A), types.B),
-			Memoize: false,
+			Memoize: true,
 		},
 		func(bctx rego.BuiltinContext, op1 *ast.Term) (*ast.Term, error) {
+			var args dsr3.CheckRelationRequest
 
-			type args struct {
-				Subject      *dsc.ObjectIdentifier       `json:"subject"`
-				RelationType *dsc.RelationTypeIdentifier `json:"relation"`
-				Object       *dsc.ObjectIdentifier       `json:"object"`
-			}
-
-			var a args
-
-			if err := ast.As(op1.Value, &a); err != nil {
+			if err := ast.As(op1.Value, &args); err != nil {
+				traceError(&bctx, fnName, err)
 				return nil, err
 			}
 
-			if a.Subject == nil && a.RelationType == nil && a.Object == nil {
-				a = args{
-					Subject: &dsc.ObjectIdentifier{
-						Type: proto.String(""),
-						Key:  proto.String(""),
-					},
-					RelationType: &dsc.RelationTypeIdentifier{
-						Name: proto.String(""),
-					},
-					Object: &dsc.ObjectIdentifier{
-						Type: proto.String(""),
-						Key:  proto.String(""),
-					},
-				}
-				return help(fnName, a)
+			if proto.Equal(&args, &dsr3.CheckRelationRequest{}) {
+				return helpMsg(fnName, &dsr3.CheckRelationRequest{
+					ObjectType:  "",
+					ObjectId:    "",
+					Relation:    "",
+					SubjectType: "",
+					SubjectId:   "",
+					Trace:       false,
+				})
 			}
 
-			client, err := dr.GetDS(bctx.Context)
-			if err != nil {
-				return nil, errors.Wrapf(err, "get directory client")
-			}
-
-			resp, err := client.CheckRelation(bctx.Context, &dsr.CheckRelationRequest{
-				Subject:  a.Subject,
-				Relation: a.RelationType,
-				Object:   a.Object,
-				Trace:    false,
-			})
+			//nolint: staticcheck // SA1019: client.CheckRelation is deprecated
+			resp, err := dr.GetDS().CheckRelation(bctx.Context, &args)
 			if err != nil {
 				traceError(&bctx, fnName, err)
 				return nil, err
@@ -86,69 +103,41 @@ func RegisterCheckRelation(logger *zerolog.Logger, fnName string, dr resolvers.D
 
 // RegisterCheckPermission - ds.check_permission
 //
-//	ds.check_permission({
-//		"object": {
-//		  "type": ""
-//		  "key": "",
-//		},
-//		"permission": {
-//		  "name": ""
-//		},
-//		"subject": {
-//		  "type": ""
-//		  "key": "",
-//		}
-//	})
+//	ds.check_permission: {
+//		"object_id": "",
+//		"object_type": "",
+//		"permission": "",
+//		"subject_id": "",
+//		"subject_type": "",
+//		"trace": false
+//	  }
 func RegisterCheckPermission(logger *zerolog.Logger, fnName string, dr resolvers.DirectoryResolver) (*rego.Function, rego.Builtin1) {
 	return &rego.Function{
 			Name:    fnName,
 			Decl:    types.NewFunction(types.Args(types.A), types.B),
-			Memoize: false,
+			Memoize: true,
 		},
 		func(bctx rego.BuiltinContext, op1 *ast.Term) (*ast.Term, error) {
+			var args dsr3.CheckPermissionRequest
 
-			type args struct {
-				Subject    *dsc.ObjectIdentifier     `json:"subject"`
-				Permission *dsc.PermissionIdentifier `json:"permission"`
-				Object     *dsc.ObjectIdentifier     `json:"object"`
-			}
-
-			var a args
-
-			if err := ast.As(op1.Value, &a); err != nil {
+			if err := ast.As(op1.Value, &args); err != nil {
+				traceError(&bctx, fnName, err)
 				return nil, err
 			}
 
-			if a.Subject == nil && a.Permission == nil && a.Object == nil {
-				a = args{
-					Subject: &dsc.ObjectIdentifier{
-						Type: proto.String(""),
-						Key:  proto.String(""),
-					},
-					Permission: &dsc.PermissionIdentifier{
-						Name: proto.String(""),
-					},
-					Object: &dsc.ObjectIdentifier{
-						Type: proto.String(""),
-						Key:  proto.String(""),
-					},
-				}
-				return help(fnName, a)
+			if proto.Equal(&args, &dsr3.CheckPermissionRequest{}) {
+				return helpMsg(fnName, &dsr3.CheckPermissionRequest{
+					ObjectType:  "",
+					ObjectId:    "",
+					Permission:  "",
+					SubjectType: "",
+					SubjectId:   "",
+					Trace:       false,
+				})
 			}
 
-			client, err := dr.GetDS(bctx.Context)
-			if err != nil {
-				return nil, errors.Wrapf(err, "get directory client")
-			}
-
-			resp, err := client.CheckPermission(bctx.Context, &dsr.CheckPermissionRequest{
-				Subject: a.Subject,
-
-				Permission: a.Permission,
-
-				Object: a.Object,
-				Trace:  false,
-			})
+			//nolint: staticcheck // SA1019: client.CheckPermission is deprecated
+			resp, err := dr.GetDS().CheckPermission(bctx.Context, &args)
 			if err != nil {
 				traceError(&bctx, fnName, err)
 				return nil, err

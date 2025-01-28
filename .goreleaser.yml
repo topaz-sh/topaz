@@ -1,9 +1,14 @@
+version: 2
+
 project_name: topaz
 
 env:
+  # https://goreleaser.com/customization/env/
   - REGISTRY=ghcr.io
   - ORG=aserto-dev
   - REPO=topaz
+  - DESCRIPTION="Topaz Authorization Service"
+  - LICENSE=Apache-2.0
 
 before:
   # https://goreleaser.com/customization/hooks/
@@ -55,11 +60,32 @@ builds:
       - -X github.com/{{ .Env.ORG }}/{{ .Env.REPO }}/pkg/version.commit={{.ShortCommit}}
       - -X github.com/{{ .Env.ORG }}/{{ .Env.REPO }}/pkg/version.date={{.Date}}
     mod_timestamp: "{{ .CommitTimestamp }}"
+  - id: topaz-db
+    main: ./cmd/topaz-db
+    binary: topaz-db
+    goos:
+      - darwin
+      - linux
+      - windows
+    goarch:
+      - amd64
+      - arm64
+    env:
+      - CGO_ENABLED=0
+    ignore:
+      - goos: windows
+        goarch: arm64
+    ldflags:
+      - -s
+      - -w
+      - -X github.com/{{ .Env.ORG }}/{{ .Env.REPO }}/pkg/version.ver={{.Version}}
+      - -X github.com/{{ .Env.ORG }}/{{ .Env.REPO }}/pkg/version.commit={{.ShortCommit}}
+      - -X github.com/{{ .Env.ORG }}/{{ .Env.REPO }}/pkg/version.date={{.Date}}
+    mod_timestamp: "{{ .CommitTimestamp }}"
 
 archives:
   # https://goreleaser.com/customization/archive/
   - format: zip
-    rlcp: true
     builds:
     - topaz
     - topazd
@@ -68,14 +94,14 @@ archives:
       - README.md
     name_template: >-
       topaz_{{ .Os }}_{{- if eq .Arch "amd64" }}x86_64{{- else }}{{ .Arch }}{{ end }}
-    
+
 checksum:
   # https://goreleaser.com/customization/checksum/
   name_template: "checksums.txt"
 
 snapshot:
   # https://goreleaser.com/customization/snapshots/
-  name_template: "{{ .Tag }}"
+  version_template: "{{ incpatch .Version }}-{{ .ShortCommit }}{{ if .IsGitDirty }}-dirty{{ end }}"
 
 source:
   # https://goreleaser.com/customization/source/
@@ -96,35 +122,23 @@ release:
     name: "{{ .Env.REPO }}"
 
   draft: false
-  prerelease: false
+  prerelease: "false"
   name_template: "{{.ProjectName}} {{.Tag}}"
 
 blobs:
   # https://goreleaser.com/customization/blob/
-  -
-    provider: gs
-    bucket: topaz-cli
-    folder: "topaz/{{ .Version }}"
-    extra_files:
-      - glob: VERSION.txt
-  -
-    provider: gs
-    bucket: topaz-cli
-    folder: "topaz/latest"
-    extra_files:
-      - glob: VERSION.txt
 
 brews:
   # https://goreleaser.com/customization/homebrew/
   -
     name: topaz
 
-    tap:
+    repository:
       owner: "{{ .Env.ORG }}"
       name: homebrew-tap
       token: "{{ .Env.ASERTO_TAP }}"
 
-    url_template: "https://storage.googleapis.com/topaz-cli/topaz/{{ .Version }}/{{ .ArtifactName }}"
+    url_template: "https://github.com/aserto-dev/topaz/releases/download/{{ .Tag }}/{{ .ArtifactName }}"
 
     download_strategy: CurlDownloadStrategy
 
@@ -161,9 +175,9 @@ dockers:
       - "--label=org.opencontainers.image.revision={{.FullCommit}}"
       - "--label=org.opencontainers.image.version={{.Version}}"
       - "--label=org.opencontainers.image.source=https://github.com/{{ .Env.ORG }}/{{ .Env.REPO }}"
-      - "--label=org.opencontainers.image.description=Topaz Authorizer"
-      - "--label=org.opencontainers.image.licenses=Apache-2.0"
-  
+      - "--label=org.opencontainers.image.description={{ .Env.DESCRIPTION }}"
+      - "--label=org.opencontainers.image.licenses={{ .Env.LICENSE }}"
+
   - use: buildx
     goos: linux
     goarch: arm64
@@ -178,8 +192,8 @@ dockers:
       - "--label=org.opencontainers.image.revision={{.FullCommit}}"
       - "--label=org.opencontainers.image.version={{.Version}}"
       - "--label=org.opencontainers.image.source=https://github.com/{{ .Env.ORG }}/{{ .Env.REPO }}"
-      - "--label=org.opencontainers.image.description=Topaz Authorizer"
-      - "--label=org.opencontainers.image.licenses=Apache-2.0"
+      - "--label=org.opencontainers.image.description={{ .Env.DESCRIPTION }}"
+      - "--label=org.opencontainers.image.licenses={{ .Env.LICENSE }}"
 
 docker_manifests:
   # https://goreleaser.com/customization/docker_manifest/
@@ -191,3 +205,21 @@ docker_manifests:
     image_templates: [*amd64-image, *arm64-image]
   - name_template: "{{ .Env.REGISTRY }}/{{ .Env.ORG }}/{{ .Env.REPO }}:{{ .Major }}.{{ .Minor }}.{{ .Patch }}"
     image_templates: [*amd64-image, *arm64-image]
+
+sboms:
+  # https://goreleaser.com/customization/sbom/
+  - id: default
+    documents:
+      - "${artifact}-{{.Os}}-{{.Arch}}.spdx.sbom.json"
+    cmd: syft
+    args:
+      - "$artifact"
+      - "--output" 
+      - "spdx-json=$document"
+    env:
+      - SYFT_FILE_METADATA_CATALOGER_ENABLED=true 
+    artifacts: binary
+    ids:
+      - topaz
+      - topazd
+      # - topaz-db

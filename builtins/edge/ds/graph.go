@@ -3,13 +3,13 @@ package ds
 import (
 	"bytes"
 
-	dsc "github.com/aserto-dev/go-directory/aserto/directory/common/v2"
-	dsr "github.com/aserto-dev/go-directory/aserto/directory/reader/v2"
+	dsr3 "github.com/aserto-dev/go-directory/aserto/directory/reader/v3"
 	"github.com/aserto-dev/topaz/resolvers"
+
 	"github.com/open-policy-agent/opa/ast"
 	"github.com/open-policy-agent/opa/rego"
 	"github.com/open-policy-agent/opa/types"
-	"github.com/pkg/errors"
+
 	"github.com/rs/zerolog"
 	"google.golang.org/protobuf/proto"
 )
@@ -17,74 +17,43 @@ import (
 // RegisterGraph - ds.graph
 //
 //	ds.graph({
-//		"anchor": {
-//		  "type": ""
-//		  "key": "",
-//		},
-//		"object": {
-//		  "type": ""
-//		  "key": "",
-//		},
-//		"relation": {
-//		  "name": "",
-//		},
-//		"subject": {
-//		  "type": ""
-//		  "key": "",
-//		}
-//	})
+//	    "object_type": "",
+//	    "object_id": "",
+//	    "relation": "",
+//	    "subject_type": "",
+//	    "subject_id": "",
+//	    "subject_relation": "",
+//	    "explain": false,
+//	    "trace": false
+//	}
 func RegisterGraph(logger *zerolog.Logger, fnName string, dr resolvers.DirectoryResolver) (*rego.Function, rego.Builtin1) {
 	return &rego.Function{
 			Name:    fnName,
 			Decl:    types.NewFunction(types.Args(types.A), types.A),
-			Memoize: false,
+			Memoize: true,
 		},
 		func(bctx rego.BuiltinContext, op1 *ast.Term) (*ast.Term, error) {
+			var args dsr3.GetGraphRequest
 
-			type args struct {
-				Anchor   *dsc.ObjectIdentifier       `json:"anchor"`
-				Subject  *dsc.ObjectIdentifier       `json:"subject"`
-				Relation *dsc.RelationTypeIdentifier `json:"relation"`
-				Object   *dsc.ObjectIdentifier       `json:"object"`
-			}
-
-			var a args
-			if err := ast.As(op1.Value, &a); err != nil {
+			if err := ast.As(op1.Value, &args); err != nil {
+				traceError(&bctx, fnName, err)
 				return nil, err
 			}
 
-			if a.Anchor == nil && a.Subject == nil && a.Relation == nil && a.Object == nil {
-				a = args{
-					Anchor: &dsc.ObjectIdentifier{
-						Type: proto.String(""),
-						Key:  proto.String(""),
-					},
-					Subject: &dsc.ObjectIdentifier{
-						Type: proto.String(""),
-						Key:  proto.String(""),
-					},
-					Relation: &dsc.RelationTypeIdentifier{
-						Name: proto.String(""),
-					},
-					Object: &dsc.ObjectIdentifier{
-						Type: proto.String(""),
-						Key:  proto.String(""),
-					},
-				}
-				return help(fnName, a)
+			if proto.Equal(&args, &dsr3.GetGraphRequest{}) {
+				return helpMsg(fnName, &dsr3.GetGraphRequest{
+					ObjectType:      "",
+					ObjectId:        "",
+					Relation:        "",
+					SubjectType:     "",
+					SubjectId:       "",
+					SubjectRelation: "",
+					Explain:         false,
+					Trace:           false,
+				})
 			}
 
-			client, err := dr.GetDS(bctx.Context)
-			if err != nil {
-				return nil, errors.Wrapf(err, "get directory client")
-			}
-
-			resp, err := client.GetGraph(bctx.Context, &dsr.GetGraphRequest{
-				Anchor:   a.Anchor,
-				Subject:  a.Subject,
-				Relation: a.Relation,
-				Object:   a.Object,
-			})
+			resp, err := dr.GetDS().GetGraph(bctx.Context, &args)
 			if err != nil {
 				traceError(&bctx, fnName, err)
 				return nil, err

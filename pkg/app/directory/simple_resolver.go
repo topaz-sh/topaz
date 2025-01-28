@@ -1,56 +1,41 @@
 package directory
 
 import (
-	"context"
+	client "github.com/aserto-dev/go-aserto"
+	dsr3 "github.com/aserto-dev/go-directory/aserto/directory/reader/v3"
+	"google.golang.org/grpc"
 
-	grpcc "github.com/aserto-dev/go-aserto/client"
-	ds2 "github.com/aserto-dev/go-directory/aserto/directory/reader/v2"
-
-	"github.com/aserto-dev/topaz/directory"
 	"github.com/aserto-dev/topaz/resolvers"
 	"github.com/rs/zerolog"
 )
 
 type Resolver struct {
+	dirConn *grpc.ClientConn
 	logger  *zerolog.Logger
-	cfg     *directory.Config
-	dirConn *grpcc.Connection
 }
 
 var _ resolvers.DirectoryResolver = &Resolver{}
 
-func NewResolver(logger *zerolog.Logger, cfg *directory.Config) resolvers.DirectoryResolver {
-	return &Resolver{
-		logger: logger,
-		cfg:    cfg,
-	}
-}
+// The simple directory resolver returns a simple directory reader client.
+func NewResolver(logger *zerolog.Logger, cfg *client.Config) (*Resolver, error) {
+	l := logger.With().Interface("client", cfg).Logger()
+	l.Debug().Msg("new directory resolver")
 
-func connect(logger *zerolog.Logger, cfg *directory.Config) (*grpcc.Connection, error) {
-	logger.Debug().Str("tenant-id", cfg.Remote.TenantID).Str("addr", cfg.Remote.Addr).Str("apiKey", cfg.Remote.Key).Bool("insecure", cfg.Remote.Insecure).Msg("GetDS")
-
-	ctx := context.Background()
-
-	conn, err := grpcc.NewConnection(ctx,
-		grpcc.WithAddr(cfg.Remote.Addr),
-		grpcc.WithAPIKeyAuth(cfg.Remote.Key),
-		grpcc.WithTenantID(cfg.Remote.TenantID),
-		grpcc.WithInsecure(cfg.Remote.Insecure),
-	)
+	conn, err := cfg.Connect()
 	if err != nil {
 		return nil, err
 	}
-	return conn, nil
+
+	return &Resolver{dirConn: conn, logger: &l}, nil
 }
 
-// GetDS - simple.
-func (r *Resolver) GetDS(ctx context.Context) (ds2.ReaderClient, error) {
-	if r.dirConn == nil {
-		dirConn, err := connect(r.logger, r.cfg)
-		if err != nil {
-			return nil, err
-		}
-		r.dirConn = dirConn
+func (r *Resolver) Close() {
+	if err := r.dirConn.Close(); err != nil {
+		r.logger.Err(err).Msg("failed to close directory connection")
 	}
-	return ds2.NewReaderClient(r.dirConn.Conn), nil
+}
+
+// GetDS - returns a directory reader service client.
+func (r *Resolver) GetDS() dsr3.ReaderClient {
+	return dsr3.NewReaderClient(r.dirConn)
 }

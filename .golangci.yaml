@@ -2,6 +2,9 @@
 # golangci.com configuration
 # https://github.com/golangci/golangci/wiki/Configuration
 
+run:
+  timeout: 5m
+
 linters-settings:
   depguard:
     list-type: blacklist
@@ -15,8 +18,6 @@ linters-settings:
   funlen:
     lines: 100
     statements: 80
-  gci:
-    local-prefixes: github.com/golangci/golangci-lint
   goconst:
     min-len: 2
     min-occurrences: 2
@@ -40,16 +41,16 @@ linters-settings:
   golint:
     min-confidence: 0
   gomnd:
-    settings:
-      mnd:
-        # don't include the "operation" and "assign"
-        checks: 
-          - argument
-          - case
-          - condition
-          - return
+    checks:
+      - argument
+      - case
+      - condition
+      - return
+  gosec:
+    excludes:
+      - G115 # potential integer overflow when converting between integer types
   govet:
-    check-shadowing: true
+    shadow: true
     settings:
       printf:
         funcs:
@@ -73,10 +74,10 @@ linters:
   enable:
     - asciicheck
     - bodyclose
-    - depguard
+    - copyloopvar
     - dogsled
     - errcheck
-    - exportloopref
+    - errname
     - exhaustive
     - funlen
     - gochecknoinits
@@ -84,27 +85,32 @@ linters:
     - gocritic
     - gocyclo
     - godot
-    # - goerr113 # temporary disabled
+    - gosimple
+    - err113
     - gofmt
     - goimports
     - goprintffuncname
     - gosec
     - gosimple
     - govet
+    - importas
     - ineffassign
     - misspell
     - nakedret
     - noctx
-    # - rowserrcheck # disable https://github.com/golangci/golangci-lint/issues/2649.
+    - rowserrcheck
     - staticcheck
     - stylecheck
+    - testifylint
     - testpackage
     - typecheck
     - unconvert
     - unparam
     - unused
+    - wastedassign
 
   # don't enable:
+    # - depguard
     # - dupl
     # - gochecknoglobals
     # - gocognit
@@ -153,8 +159,10 @@ issues:
     - text: "G404"
       linters:
       - gosec
-
-run:
-  timeout: 5m
-  skip-dirs:
-  - pkg/testharness/testdata
+    - text: "SA1019: \\S+ is deprecated"
+      linters:
+      - staticcheck
+    - path: internal/pkg/xdg/.*\.go
+      linters:
+      - gochecknoinits
+      - gocritic

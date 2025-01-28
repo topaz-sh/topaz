@@ -2,59 +2,98 @@ package app
 
 import (
 	"context"
+	"net/http"
 	"strconv"
-	"strings"
 
-	edgeServer "github.com/aserto-dev/go-edge-ds/pkg/server"
-	"github.com/aserto-dev/topaz/pkg/app/server"
+	authz "github.com/aserto-dev/go-authorizer/aserto/authorizer/v2"
+	azOpenAPI "github.com/aserto-dev/openapi-authorizer/publish/authorizer"
+	"github.com/aserto-dev/topaz/pkg/app/impl"
 	"github.com/aserto-dev/topaz/pkg/cc/config"
+	builder "github.com/aserto-dev/topaz/pkg/service/builder"
 	"github.com/aserto-dev/topaz/resolvers"
+	"github.com/grpc-ecosystem/grpc-gateway/v2/runtime"
+
 	"github.com/pkg/errors"
 	"github.com/rs/zerolog"
+	"google.golang.org/grpc"
 )
 
-// Authorizer is an authorizer service instance, responsible for managing
-// the authorizer API, user directory instance and the OPA plugins.
 type Authorizer struct {
-	Context       context.Context
-	Logger        *zerolog.Logger
-	Configuration *config.Config
-	Server        *server.Server
-	Resolver      *resolvers.Resolvers
+	Resolver         *resolvers.Resolvers
+	AuthorizerServer *impl.AuthorizerServer
+
+	cfg  *builder.API
+	opts []grpc.ServerOption
 }
 
-// Start starts all services required by the engine.
-func (e *Authorizer) Start() error {
-	if (strings.Contains(e.Configuration.Directory.Remote.Addr, "localhost") || strings.Contains(e.Configuration.Directory.Remote.Addr, "0.0.0.0")) &&
-		e.Configuration.Directory.EdgeConfig.DBPath != "" {
-		addr := strings.Split(e.Configuration.Directory.Remote.Addr, ":")
-		if len(addr) != 2 {
-			return errors.Errorf("invalid remote address - should contain <host>:<port>")
+const (
+	authorizerService = "authorizer"
+)
+
+func NewAuthorizer(ctx context.Context, cfg *builder.API, commonConfig *config.Common, authorizerOpts []grpc.ServerOption, logger *zerolog.Logger) (ServiceTypes, error) {
+	if cfg.GRPC.Certs.HasCert() {
+		tlsCreds, err := cfg.GRPC.Certs.ServerCredentials()
+		if err != nil {
+			return nil, errors.Wrap(err, "failed to calculate tls config")
 		}
 
-		port, err := strconv.Atoi(addr[1])
-		if err != nil {
+		tlsAuth := grpc.Creds(tlsCreds)
+		authorizerOpts = append(authorizerOpts, tlsAuth)
+	}
+
+	authResolvers := resolvers.New()
+
+	authServer := impl.NewAuthorizerServer(ctx, logger, commonConfig, authResolvers)
+
+	return &Authorizer{
+		cfg:              cfg,
+		opts:             authorizerOpts,
+		Resolver:         authResolvers,
+		AuthorizerServer: authServer,
+	}, nil
+}
+
+func (e *Authorizer) AvailableServices() []string {
+	return []string{authorizerService}
+}
+
+func (e *Authorizer) GetGRPCRegistrations(services ...string) builder.GRPCRegistrations {
+	return func(server *grpc.Server) {
+		authz.RegisterAuthorizerServer(server, e.AuthorizerServer)
+	}
+}
+
+func (e *Authorizer) GetGatewayRegistration(services ...string) builder.HandlerRegistrations {
+	return func(ctx context.Context, mux *runtime.ServeMux, grpcEndpoint string, opts []grpc.DialOption) error {
+		if err := authz.RegisterAuthorizerHandlerFromEndpoint(ctx, mux, grpcEndpoint, opts); err != nil {
 			return err
 		}
 
-		edge, err := edgeServer.NewEdgeServer(
-			e.Configuration.Directory.EdgeConfig,
-			&e.Configuration.API.GRPC.Certs,
-			addr[0],
-			port,
-			e.Logger,
-		)
-		if err != nil {
-			return errors.Wrap(err, "failed to create edge directory server")
+		if len(services) > 0 {
+			if err := mux.HandlePath(http.MethodGet, authorizerOpenAPISpec, azOpenAPIHandler); err != nil {
+				return err
+			}
 		}
 
-		e.Server.RegisterServer("edgeDirServer", edge.Start, edge.Stop)
+		return nil
 	}
+}
 
-	err := e.Server.Start(e.Context)
-	if err != nil {
-		return errors.Wrap(err, "failed to start engine server")
-	}
-
+func (e *Authorizer) Cleanups() []func() {
 	return nil
+}
+
+const (
+	authorizerOpenAPISpec string = "/authorizer/openapi.json"
+)
+
+func azOpenAPIHandler(w http.ResponseWriter, r *http.Request, pathParams map[string]string) {
+	buf, err := azOpenAPI.Static().ReadFile("openapi.json")
+	if err != nil {
+		w.WriteHeader(http.StatusNotFound)
+	}
+
+	w.Header().Add("Content-Type", "application/json")
+	w.Header().Add("Content-Length", strconv.FormatInt(int64(len(buf)), 10))
+	_, _ = w.Write(buf)
 }

@@ -14,18 +14,19 @@
 # Dependency directories (remove the comment below to include it)
 # vendor/
 /.dev/
-/.ext
+/.ext/
 
 /bin/
-/release/
-/test/
-.opa/
-/bundle/
 /dist/
+/dist-test/
 
 # runtime directories
 /cfg/
 /eds/
+
+# OPA related
+.opa/
+/bundle/
 
 # misc
 .DS_Store
@@ -35,11 +36,15 @@
 .vscode/launch.json
 
 # test config & data files
-config.y?ml
-test.y?ml
-data?.json
-bundle.tar.gz
-*ds.db
+!config.yaml
+./pkg/testing/assets/config.y?ml
+./pkg/testing/assets/test.y?ml
+./pkg/testing/assets/data?.json
+./pkg/testing/assets/bundle.tar.gz
+./pkg/testing/assets/*ds.db
+
+# console static files that get copied at build
+/pkg/app/console/*
 
 # allow test assets
 !pkg/testing/assets/*.db
@@ -48,5 +53,12 @@ bundle.tar.gz
 # config file you can use for local development
 config-dev*.yaml
 
-# release version file, generated at release
-VERSION.txt
+# https://github.com/golang/go/issues/53502
+# go.work.sum is machine specific and should not be checked in
+go.work.sum
+
+# exclude DLV debugger generated binaries
+__debug_bin*
+
+# latest container test-snapshot
+.container-tag.env

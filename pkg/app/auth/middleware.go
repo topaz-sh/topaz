@@ -28,13 +28,11 @@ func NewAPIKeyAuthMiddleware(
 	cfg *config.AuthnConfig,
 	logger *zerolog.Logger,
 ) (*APIKeyAuthMiddleware, error) {
-
 	return &APIKeyAuthMiddleware{
 		apiAuth: cfg.APIKeys,
 		cfg:     cfg,
 		logger:  logger,
 	}, nil
-
 }
 
 func (a *APIKeyAuthMiddleware) Unary() grpc.UnaryServerInterceptor {
@@ -84,7 +82,6 @@ func (a *APIKeyAuthMiddleware) authenticate(
 	ctx context.Context,
 	path, authHeader string,
 ) (context.Context, error) {
-
 	options := a.cfg.Options.ForPath(path)
 
 	if options.EnableAnonymous {
@@ -128,7 +125,7 @@ func parseAuthHeader(val, expectedScheme string) (string, error) {
 		return "", aerr.ErrAuthenticationFailed.Msg("Bad authorization string")
 	}
 	if !strings.EqualFold(splits[0], expectedScheme) {
-		return "", aerr.ErrAuthenticationFailed.Str("expected-scheme", expectedScheme).Msg("Request unauthenticated with expected scheme")
+		return "", aerr.ErrAuthenticationFailed.Msgf("Request unauthenticated with expected scheme, expected: %s", expectedScheme)
 	}
 	return splits[1], nil
 }
