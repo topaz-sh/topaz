@@ -1,6 +1,6 @@
 module github.com/aserto-dev/topaz/magefiles
 
-go 1.19
+go 1.25.0
 
 require (
 	github.com/aserto-dev/mage-loot v0.8.15
@@ -14,6 +14,7 @@ require (
 	github.com/fatih/color v1.15.0 // indirect
 	github.com/fsnotify/fsnotify v1.6.0 // indirect
 	github.com/gitleaks/go-gitdiff v0.7.4 // indirect
+	github.com/google/go-cmp v0.6.0 // indirect
 	github.com/hashicorp/hcl v1.0.0 // indirect
 	github.com/imdario/mergo v0.3.15 // indirect
 	github.com/kyokomi/emoji v2.2.4+incompatible // indirect
@@ -36,10 +37,10 @@ require (
 	github.com/subosito/gotenv v1.4.2 // indirect
 	github.com/ulikunitz/xz v0.5.10 // indirect
 	github.com/zricethezav/gitleaks/v8 v8.3.0 // indirect
-	golang.org/x/sync v0.3.0 // indirect
-	golang.org/x/sys v0.9.0 // indirect
-	golang.org/x/term v0.9.0 // indirect
-	golang.org/x/text v0.10.0 // indirect
+	golang.org/x/sync v0.20.0 // indirect
+	golang.org/x/sys v0.45.0 // indirect
+	golang.org/x/term v0.43.0 // indirect
+	golang.org/x/text v0.37.0 // indirect
 	gopkg.in/ini.v1 v1.67.0 // indirect
 	gopkg.in/yaml.v2 v2.4.0 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
