@@ -1,6 +1,6 @@
 module github.com/aserto-dev/topaz
 
-go 1.19
+go 1.24
 
 // replace github.com/aserto-dev/go-edge-ds => ../go-edge-ds
 // replace github.com/aserto-dev/go-directory-cli => /Users/gertd/workspace/src/github.com/aserto-dev/go-directory-cli
@@ -80,7 +80,7 @@ require (
 	github.com/hashicorp/hcl v1.0.0 // indirect
 	github.com/inconshreveable/mousetrap v1.1.0 // indirect
 	github.com/jhump/protoreflect v1.15.1 // indirect
-	github.com/klauspost/compress v1.16.6 // indirect
+	github.com/klauspost/compress v1.18.7 // indirect
 	github.com/kyokomi/emoji v2.2.4+incompatible // indirect
 	github.com/lestrrat-go/backoff/v2 v2.0.8 // indirect
 	github.com/lestrrat-go/blackmagic v1.0.1 // indirect
